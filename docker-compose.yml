@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-zaguan}
+      POSTGRES_USER: ${DB_USER:-zaguan}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-zaguan}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-zaguan} -d ${DB_NAME:-zaguan}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${DB_USER:-zaguan}:${DB_PASSWORD:-zaguan}@db:5432/${DB_NAME:-zaguan}
+      JWT_SECRET: ${JWT_SECRET:-cambiar-esto-en-produccion}
+      UPLOADS_DIR: /app/uploads
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_MODEL: ${AI_MODEL:-qwen2.5:3b}
+      AI_API_KEY: ${AI_API_KEY:-}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${PUERTO:-8080}:80"
+    depends_on:
+      - backend
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    profiles: ["ia-local"]
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  db_data:
+  uploads:
+  ollama_data:
