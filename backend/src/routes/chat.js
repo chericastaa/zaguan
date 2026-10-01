@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { authOpcional } from '../middleware/auth.js';
 import { buscarPropiedades } from '../busqueda.js';
 import { BARRIOS } from '../barrios.js';
+import { GUIA, BARRIOS_INFO } from '../conocimiento.js';
 
 const router = Router();
 
 const IA = {
   url: (process.env.AI_BASE_URL || '').replace(/\/$/, ''),
-  modelo: process.env.AI_MODEL || 'qwen2.5:3b',
+  modelo: process.env.AI_MODEL || 'qwen2.5:1.5b',
   key: process.env.AI_API_KEY || '',
 };
 
@@ -69,16 +70,18 @@ export function filtrosPorReglas(texto) {
   return filtros;
 }
 
-async function filtrosPorIA(historial) {
+async function analizarConIA(historial) {
   const conversacion = historial.map((m) => `${m.rol === 'usuario' ? 'Usuario' : 'Asistente'}: ${m.texto}`).join('\n');
   const respuesta = await preguntarIA(
     [
       {
         role: 'system',
         content:
-          'Extraés filtros de búsqueda de alquileres en CABA a partir de una conversación. ' +
-          'Respondé SOLO un JSON con estas claves (usá null si no se mencionan): ' +
-          '{"barrio": string|null, "precioMin": number|null, "precioMax": number|null, "ambientes": number|null, "mascotas": boolean|null}. ' +
+          'Analizás una conversación de una app de alquileres en CABA. ' +
+          'Respondé SOLO un JSON con estas claves: ' +
+          '{"tipo": "busqueda"|"consulta"|"ambos"|"charla", "barrio": string|null, "precioMin": number|null, "precioMax": number|null, "ambientes": number|null, "mascotas": boolean|null}. ' +
+          '"busqueda" si el último mensaje pide propiedades; "consulta" si hace una pregunta sobre alquilar, contratos, garantías o cómo es un barrio; ' +
+          '"ambos" si pregunta algo y además pide propiedades; "charla" si es un saludo u otra cosa. ' +
           'Los precios son en pesos argentinos por mes, "500 mil" es 500000. ' +
           'Si el último mensaje cambia un filtro anterior, usá el valor nuevo. Si pide algo "más barato" bajá el precioMax un 20%. ' +
           `El barrio tiene que ser exactamente uno de esta lista: ${BARRIOS.join(', ')}.`,
@@ -94,7 +97,34 @@ async function filtrosPorIA(historial) {
     if (Number(json[k]) > 0) filtros[k] = Number(json[k]);
   }
   if (json.mascotas === true) filtros.mascotas = true;
-  return filtros;
+  const tipo = ['busqueda', 'consulta', 'ambos', 'charla'].includes(json.tipo) ? json.tipo : 'busqueda';
+  return { tipo, filtros };
+}
+
+const PREGUNTAS = [
+  [/garant/, 'Las garantías más comunes son la propietaria (un familiar pone un inmueble a su nombre como respaldo) y el seguro de caución, que contratás con una aseguradora y se acepta casi en todos lados. Algunos propietarios también aceptan garantes con recibo de sueldo.'],
+  [/requisit|que piden|papeles|documentacion/, 'Normalmente te piden DNI, comprobantes de ingresos y una garantía. Al firmar se suele pagar el primer mes por adelantado y un depósito de un mes.'],
+  [/expensa/, 'Las expensas son los gastos del edificio. Las ordinarias suelen pagarlas el inquilino y las extraordinarias el propietario. Siempre preguntá cuánto son antes de decidir.'],
+  [/comision/, 'En CABA hay una ley que dice que la comisión inmobiliaria la paga el propietario. Igual confirmalo con la inmobiliaria antes de firmar.'],
+  [/contrato|duracion|aumento|actualiza/, 'Hoy la duración y la actualización del precio se acuerdan en el contrato. Si no se fija duración, para vivienda son 2 años. Leelo bien y ante dudas consultá con un abogado.'],
+  [/deposito/, 'El depósito suele ser de un mes y te lo devuelven al terminar el contrato si el departamento queda bien. Sacale fotos el día que entrás.'],
+];
+
+function analizarPorReglas(historial) {
+  const ultimo = sinTildes(historial.filter((m) => m.rol === 'usuario').at(-1).texto);
+  const filtros = historial
+    .filter((m) => m.rol === 'usuario')
+    .reduce((acc, m) => ({ ...acc, ...filtrosPorReglas(m.texto) }), {});
+  const pregunta = PREGUNTAS.find(([re]) => re.test(ultimo));
+  const pideBarrio = /como es|que tal|vivir en/.test(ultimo) && filtros.barrio;
+  if (pregunta || pideBarrio) {
+    const texto = pregunta ? pregunta[1] : `${filtros.barrio}: ${BARRIOS_INFO[filtros.barrio] || 'es un barrio de CABA.'}`;
+    return { tipo: pideBarrio ? 'ambos' : 'consulta', filtros, texto };
+  }
+  if (!Object.keys(filtrosPorReglas(ultimo)).length && !/busc|alquil|depto|departamento|propiedad|ambiente/.test(ultimo)) {
+    return { tipo: 'charla', filtros };
+  }
+  return { tipo: 'busqueda', filtros };
 }
 
 const pesos = (n) => `$${Number(n).toLocaleString('es-AR')}`;
@@ -109,35 +139,48 @@ function describirFiltros(f) {
   return partes.join(' ');
 }
 
-function respuestaSimple(filtros, propiedades) {
+function respuestaSimple(analisis, propiedades) {
+  const { tipo, filtros, texto } = analisis;
+  if (tipo === 'charla') {
+    return '¡Hola! Puedo buscarte propiedades (por ejemplo "2 ambientes en Caballito hasta 600 mil") o responderte dudas sobre alquilar: garantías, requisitos, expensas o cómo es cada barrio.';
+  }
+  if (tipo === 'consulta') return texto;
   const busqueda = describirFiltros(filtros);
+  const intro = texto ? `${texto}\n\n` : '';
   if (!propiedades.length) {
-    return `No encontré propiedades ${busqueda || 'con eso'}. Probá con otro barrio o subiendo un poco el precio.`;
+    return `${intro}No encontré propiedades ${busqueda || 'con eso'}. Probá con otro barrio o subiendo un poco el precio.`;
   }
   const n = propiedades.length;
-  return `Encontré ${n} ${n === 1 ? 'opción' : 'opciones'}${busqueda ? ` (${busqueda})` : ''}. Te las dejo acá abajo 👇`;
+  return `${intro}Encontré ${n} ${n === 1 ? 'opción' : 'opciones'}${busqueda ? ` (${busqueda})` : ''}. Te las dejo acá abajo 👇`;
 }
 
-async function respuestaIA(historial, filtros, propiedades) {
+async function respuestaIA(historial, analisis, propiedades) {
+  const { tipo, filtros } = analisis;
+  const conPropiedades = tipo === 'busqueda' || tipo === 'ambos';
   const resumen = propiedades.length
     ? propiedades
         .map((p) => `- ${p.titulo} (${p.barrio}, ${p.ambientes} amb, ${pesos(p.precio)}/mes${p.mascotas ? ', acepta mascotas' : ''})`)
         .join('\n')
     : 'Ninguna propiedad coincide.';
+  const barrio = filtros.barrio && BARRIOS_INFO[filtros.barrio] ? `\n\nSOBRE ${filtros.barrio.toUpperCase()}: ${BARRIOS_INFO[filtros.barrio]}` : '';
+
   return preguntarIA([
     {
       role: 'system',
       content:
-        'Sos el asistente de Zaguán, una app de alquileres en CABA. Hablás en español rioplatense, cálido y breve (máximo 3 oraciones). ' +
-        'Solo recomendás propiedades de la lista que te pasan, nunca inventes otras. ' +
-        'Las tarjetas con las propiedades ya se muestran debajo de tu mensaje, así que no repitas todos los datos: destacá la más conveniente o por qué encajan. ' +
-        'Si no hay resultados, sugerí cambiar barrio, precio o ambientes.',
+        'Sos el asistente de Zaguán, una app de alquileres en CABA. Hablás en español rioplatense, cálido y claro, en 2 a 5 oraciones. ' +
+        'Ayudás a encontrar propiedades y respondés dudas sobre alquilar en Buenos Aires: requisitos, garantías, contratos, expensas y barrios. ' +
+        'Usá la guía de abajo como fuente principal y no inventes datos legales, montos ni porcentajes. Si algo no está en la guía, respondé de forma general y sugerí confirmarlo. ' +
+        'Si te preguntan algo que no tiene que ver con alquilar o vivir en CABA, respondé amablemente que solo podés ayudar con eso. ' +
+        (conPropiedades
+          ? 'Solo recomendás propiedades de la lista que te pasan, nunca inventes otras. Las tarjetas ya se muestran debajo de tu mensaje: no repitas todos los datos, destacá la más conveniente. Si no hay resultados, sugerí cambiar barrio, precio o ambientes.'
+          : 'En esta respuesta no muestres ni inventes propiedades; al final podés ofrecer buscar opciones.') +
+        `\n\nGUÍA DE ALQUILERES:\n${GUIA}${barrio}`,
     },
     ...historial.slice(-6).map((m) => ({ role: m.rol === 'usuario' ? 'user' : 'assistant', content: m.texto })),
-    {
-      role: 'system',
-      content: `Filtros entendidos: ${describirFiltros(filtros) || 'ninguno'}\nResultados:\n${resumen}`,
-    },
+    ...(conPropiedades
+      ? [{ role: 'system', content: `Filtros entendidos: ${describirFiltros(filtros) || 'ninguno'}\nResultados:\n${resumen}` }]
+      : []),
   ]);
 }
 
@@ -149,36 +192,36 @@ router.post('/', authOpcional, async (req, res, next) => {
     const ultimo = historial.filter((m) => m.rol === 'usuario').at(-1);
     if (!ultimo) return res.status(400).json({ error: 'Escribí qué estás buscando' });
 
-    let filtros;
+    let analisis = null;
     let usoIA = false;
     if (IA.url) {
       try {
-        filtros = await filtrosPorIA(historial);
+        analisis = await analizarConIA(historial);
         usoIA = true;
       } catch (err) {
-        console.error('Fallo la IA al extraer filtros:', err.message);
+        console.error('Fallo la IA al analizar:', err.message);
       }
     }
-    if (!filtros) {
-      filtros = historial
-        .filter((m) => m.rol === 'usuario')
-        .reduce((acc, m) => ({ ...acc, ...filtrosPorReglas(m.texto) }), {});
-    }
+    if (!analisis) analisis = analizarPorReglas(historial);
 
-    const propiedades = await buscarPropiedades({ ...filtros, orden: 'precio-asc' }, req.usuario?.id, 6);
+    const conPropiedades = analisis.tipo === 'busqueda' || analisis.tipo === 'ambos';
+    const propiedades = conPropiedades
+      ? await buscarPropiedades({ ...analisis.filtros, orden: 'precio-asc' }, req.usuario?.id, 6)
+      : [];
 
     let respuesta = null;
     if (usoIA) {
       try {
-        respuesta = await respuestaIA(historial, filtros, propiedades);
+        respuesta = await respuestaIA(historial, analisis, propiedades);
       } catch (err) {
         console.error('Fallo la IA al responder:', err.message);
       }
     }
 
     res.json({
-      respuesta: respuesta || respuestaSimple(filtros, propiedades),
-      filtros,
+      respuesta: respuesta || respuestaSimple(analisis, propiedades),
+      tipo: analisis.tipo,
+      filtros: analisis.filtros,
       propiedades,
       ia: Boolean(respuesta),
     });

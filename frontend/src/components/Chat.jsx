@@ -4,13 +4,14 @@ import { MiniTarjeta } from './PropiedadCard';
 
 const SUGERENCIAS = [
   'Un 2 ambientes en Palermo hasta 600 mil',
-  'Algo que acepte mascotas en Caballito',
-  'El monoambiente más barato',
+  '¿Qué es una garantía propietaria?',
+  '¿Cómo es vivir en Villa Crespo?',
+  '¿Qué piden para alquilar?',
 ];
 
 const BIENVENIDA = {
   rol: 'asistente',
-  texto: '¡Hola! Soy el asistente de Zaguán. Contame qué estás buscando: barrio, ambientes, presupuesto, si tenés mascota… y te recomiendo opciones.',
+  texto: '¡Hola! Soy el asistente de Zaguán. Te ayudo a encontrar propiedades y te respondo dudas sobre alquilar en Buenos Aires: garantías, requisitos, expensas o cómo es cada barrio.',
 };
 
 export default function Chat() {
@@ -80,7 +81,7 @@ export default function Chat() {
                 ))}
               </div>
             )}
-            {pensando && <p className="burbuja burbuja--pensando">Buscando propiedades…</p>}
+            {pensando && <p className="burbuja burbuja--pensando">Pensando…</p>}
             <div ref={fin} />
           </div>
 
@@ -96,7 +97,7 @@ export default function Chat() {
               id="chat-texto"
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
-              placeholder="Ej: 3 ambientes en Belgrano"
+              placeholder="Buscá o preguntá lo que quieras"
               maxLength={300}
               autoComplete="off"
             />

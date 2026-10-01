@@ -106,13 +106,13 @@ La primera vez tarda unos minutos. Después abrí **http://localhost:8080** en e
 
 El chat funciona siempre: si no hay IA configurada, entiende la búsqueda con reglas simples. Para que responda con IA de verdad:
 
-**Opción A: IA local con Ollama** (necesita unos 8 GB de RAM)
+**Opción A: IA local con Ollama** (necesita unos 4 GB de RAM libres)
 
 ```bash
 ./scripts/ia-local.sh
 ```
 
-Descarga el modelo `qwen2.5:3b` (unos 2 GB) y reinicia el back.
+Descarga el modelo `qwen2.5:1.5b` (alrededor de 1 GB) y reinicia el back.
 
 **Opción B: Groq** (si tu compu queda lenta)
 
@@ -248,3 +248,5 @@ fotos (id, propiedad_id, url)   favoritos (usuario_id, propiedad_id)
 5. El front muestra la respuesta con las tarjetas de las propiedades
 
 Como se manda el historial, entiende seguimientos como *"y en Belgrano?"* o *"algo más barato"*.
+
+Además de buscar, el asistente responde dudas sobre alquilar en CABA (garantías, requisitos, expensas, contratos y cómo es cada barrio). Para eso usa una guía propia en `backend/src/conocimiento.js`, así responde con información controlada en lugar de inventar. Si la IA no está disponible, contesta las preguntas más comunes con respuestas predefinidas.

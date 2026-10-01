@@ -22,7 +22,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-cambiar-esto-en-produccion}
       UPLOADS_DIR: /app/uploads
       AI_BASE_URL: ${AI_BASE_URL:-}
-      AI_MODEL: ${AI_MODEL:-qwen2.5:3b}
+      AI_MODEL: ${AI_MODEL:-qwen2.5:1.5b}
       AI_API_KEY: ${AI_API_KEY:-}
     volumes:
       - uploads:/app/uploads
